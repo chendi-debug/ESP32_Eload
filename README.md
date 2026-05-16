@@ -1,6 +1,6 @@
 # ESP32_Eload - 电子负载 ESP32 WiFi 数据推送模块
 
-基于 ESP32 + ESP-IDF 开发的电子负载 WiFi 数据中转模块，通过 UART 接收 CH32V307 推送的实时数据，经 WebSocket 广播到网页端，支持 IV 扫描曲线实时显示。
+基于 ESP32 + ESP-IDF 开发，配合智能电源特性分析仪使用的 WiFi 数据中转模块，通过 UART 接收 CH32V307 推送的实时数据，经 WebSocket 广播到网页端，支持 IV 扫描曲线实时显示。
 
 ## 功能特性
 
