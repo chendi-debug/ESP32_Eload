@@ -18,15 +18,15 @@
 #define WIFI_PASS "12345678"
 
 // ---- STA（上网）配置 ----
-#define STA_SSID "CD5653"
-#define STA_PASS "12345678"
+#define STA_SSID "iphone"
+#define STA_PASS "123456789"
 
 // ---- OneNET MQTT 配置 ----
-#define ONENET_HOST "50359UYKlJ.mqtts.acc.cmcconenet.cn"
+#define ONENET_HOST "mqtts.heclouds.com"
 #define ONENET_PORT 1883
-#define ONENET_PRODUCT "50359UYKlJ"
-#define ONENET_DEVICE "Eload_Bycd"
-#define ONENET_TOKEN "version=2018-10-31&res=products%2F50359UYKlJ%2Fdevices%2FEload_Bycd&et=1907466005&method=md5&sign=5vjPLzGnhgB3Wjpn4g4hpQ%3D%3D"
+#define ONENET_PRODUCT "69b9BTL3qB"
+#define ONENET_DEVICE "Eload01"
+#define ONENET_TOKEN "version=2018-10-31&res=products%2F69b9BTL3qB%2Fdevices%2FEload01&et=2160363920&method=md5&sign=HvIRxil7Cd66Z0MJL%2FmtyQ%3D%3D"
 // 上报 topic
 #define ONENET_TOPIC_PUB "$sys/" ONENET_PRODUCT "/" ONENET_DEVICE "/thing/property/post"
 #define UART_NUM UART_NUM_1
@@ -404,16 +404,21 @@ static void wifi_init_apsta(void)
 static void mqtt_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data)
 {
-    (void)data;
+    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)data;
     switch (id)
     {
     case MQTT_EVENT_CONNECTED:
         mqtt_connected = true;
         ESP_LOGI(TAG, "MQTT connected to OneNET");
+        esp_mqtt_client_subscribe(mqtt_client,
+            "$sys/" ONENET_PRODUCT "/" ONENET_DEVICE "/thing/property/post/reply", 0);
         break;
     case MQTT_EVENT_DISCONNECTED:
         mqtt_connected = false;
         ESP_LOGW(TAG, "MQTT disconnected");
+        break;
+    case MQTT_EVENT_DATA:
+        ESP_LOGI(TAG, "MQTT reply: %.*s", event->data_len, event->data);
         break;
     case MQTT_EVENT_ERROR:
         ESP_LOGE(TAG, "MQTT error");
@@ -434,6 +439,8 @@ static void mqtt_init(void)
         .credentials.client_id = ONENET_DEVICE,
         .credentials.username = ONENET_PRODUCT,
         .credentials.authentication.password = ONENET_TOKEN,
+        .session.keepalive = 60,
+        .session.protocol_ver = MQTT_PROTOCOL_V_3_1_1,
     };
     mqtt_client = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_register_event(mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
@@ -445,8 +452,12 @@ static void mqtt_init(void)
 static void mqtt_publish(const char *json)
 {
     if (!mqtt_connected || !mqtt_client)
+    {
+        ESP_LOGW(TAG, "MQTT not connected, skip publish");
         return;
-    esp_mqtt_client_publish(mqtt_client, ONENET_TOPIC_PUB, json, 0, 0, 0);
+    }
+    int ret = esp_mqtt_client_publish(mqtt_client, ONENET_TOPIC_PUB, json, 0, 0, 0);
+    ESP_LOGI(TAG, "MQTT publish ret=%d topic=%s", ret, ONENET_TOPIC_PUB);
 }
 
 static void uart_init(void)
@@ -538,7 +549,34 @@ static void uart_rx_task(void *arg)
                     bcast_msg_t msg;
                     memcpy(msg.buf, buf, pos + 1);
                     xQueueSend(bcast_queue, &msg, 0);
-                    mqtt_publish((char *)buf);
+
+                    // 解析原始 JSON: {"v":330,"i":100,"p":33,"m":0,"o":1}
+                    char *vp = strstr((char *)buf, "\"v\":");
+                    char *ip = strstr((char *)buf, "\"i\":");
+                    char *pp = strstr((char *)buf, "\"p\":");
+                    char *mp = strstr((char *)buf, "\"m\":");
+                    if (vp && ip && pp && mp) {
+                        static uint32_t msg_id = 1;
+                        int vi = atoi(vp + 4);
+                        int ii = atoi(ip + 4);
+                        int pi = atoi(pp + 4);
+                        int mi = atoi(mp + 4);
+                        const char *mode_str = (mi == 0) ? "CC" :
+                                               (mi == 1) ? "CV" :
+                                               (mi == 2) ? "CR" :
+                                               (mi == 3) ? "CW" : "menu";
+                        char onenet_buf[256];
+                        snprintf(onenet_buf, sizeof(onenet_buf),
+                            "{\"id\":\"%lu\",\"version\":\"1.0\",\"params\":{"
+                            "\"voltage\":{\"value\":%.2f},"
+                            "\"current\":{\"value\":%.2f},"
+                            "\"power\":{\"value\":%.2f},"
+                            "\"mode\":{\"value\":\"%s\"}"
+                            "}}",
+                            (unsigned long)msg_id++,
+                            vi / 100.0f, ii / 100.0f, pi / 100.0f, mode_str);
+                        mqtt_publish(onenet_buf);
+                    }
                 }
             }
             pos = 0;
